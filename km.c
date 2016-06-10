@@ -130,27 +130,28 @@ static struct arg_out_compute_centroids compute_centroids(struct arg_in_compute_
 }
 
 void master() {
-  if (!(data = calloc(npoints*sizeof(vector_t))))
+  printf("Master: %d\n", rank);
+  if (!(data = calloc(npoints, sizeof(vector_t))))
     exit(1);
 
-  for (i = 0; i < npoints; i++) {
-    data[i] = calloc(sizeof(float) * dimension);
-    for (j = 0; j < dimension; j++)
+  for (int i = 0; i < npoints; i++) {
+    data[i] = calloc(dimension, sizeof(float));
+    for (int j = 0; j < dimension; j++)
       data[i][j] = randnum() & 0xffff;
   }
 
   too_far = 0;
   has_changed = 0;
 
-  if (!(centroids = calloc(ncentroids*sizeof(vector_t))))
+  if (!(centroids = calloc(ncentroids, sizeof(vector_t))))
     exit (1);
   if (!(map  = calloc(npoints, sizeof(int))))
     exit (1);
-  if (!(dirty = calloc(ncentroids*sizeof(int))))
+  if (!(dirty = calloc(ncentroids, sizeof(int))))
     exit (1);
 
   for (int i = 0; i < ncentroids; i++)
-    centroids[i] = calloc(sizeof(float) * dimension);
+    centroids[i] = calloc(dimension, sizeof(float));
   for (int i = 0; i < npoints; i++)
     map[i] = -1;
   for (int i = 0; i < ncentroids; i++) {
@@ -167,14 +168,15 @@ void master() {
 
   do { /* Cluster data. */
     //populate();
+    printf("populate bcast\n");
     for (int i = 0; i < npoints; ++i) {
       MPI_Bcast(data[i], dimension, MPI_FLOAT, 0, MPI_COMM_WORLD);
     }
     MPI_Bcast(map, npoints, MPI_INT, 0, MPI_COMM_WORLD);
-    for (int i = 0; i < centroids; ++i) {
+    for (int i = 0; i < ncentroids; ++i) {
       MPI_Bcast(centroids[i], dimension, MPI_FLOAT, 0, MPI_COMM_WORLD);
     }
-    for (int i = 1; int < size-1; ++i) {
+    for (int i = 1; i < size; ++i) {
       int *tmp_map;
       int *tmp_dirty;
       int *tmp_too_far;
@@ -182,33 +184,36 @@ void master() {
       MPI_Recv(tmp_dirty, ncentroids, MPI_INT, i, 1, MPI_COMM_WORLD, NULL);
       MPI_Recv(tmp_too_far, 1, MPI_INT, i, 2, MPI_COMM_WORLD, NULL);
       for (int j = 0; j < npoints; ++j) {
-        map[j] = map[j] | tmp_map[j];
+        map[j] = tmp_map[j];
       }
       for (int j = 0; j < ncentroids; ++j) {
-        dirty[j] = dirty[j] | tmp_dirty[j];
+        dirty[j] = tmp_dirty[j];
       }
       too_far = too_far | *tmp_too_far;
     }
+    printf("populate end\n");
     //compute_centroids();
+    printf("compute_centroids bcast\n");
     for (int i = 0; i < npoints; ++i) {
       MPI_Bcast(data[i], dimension, MPI_FLOAT, 0, MPI_COMM_WORLD);
     }
     MPI_Bcast(dirty, ncentroids, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(map, npoints, MPI_INT, 0, MPI_COMM_WORLD);
-    for (int i = 1; i < size-1; ++i) {
+    for (int i = 1; i < size; ++i) {
       int *tmp_has_changed;
       vector_t *tmp_centroids;
-      MPI_Recv(tmp_has_changed, 1, MPI_INT, i, 3, MPI_COMM_WORLD);
+      MPI_Recv(tmp_has_changed, 1, MPI_INT, i, 3, MPI_COMM_WORLD, NULL);
       for (int j = 0; j < ncentroids; ++j) {
-        MPI_Recv(tmp_centroids[j], dimension, MPI_FLOAT, i, 4, MPI_COMM_WORLD);
+        MPI_Recv(tmp_centroids[j], dimension, MPI_FLOAT, i, 4, MPI_COMM_WORLD, NULL);
       }
       has_changed = *tmp_has_changed | has_changed;
       for (int j = 0; j < ncentroids; ++j) {
         for (int k = 0; k < dimension; ++k) {
-          centroids[j][k] = centroids[j][k] | tmp_centroids[j][k];
+          centroids[j][k] = tmp_centroids[j][k];
         }
       }
     }
+    printf("compute_centroids end\n");
   } while (too_far && has_changed);
 
   for (int i = 0; i < ncentroids; i++) {
@@ -224,12 +229,81 @@ void master() {
   free(centroids);
   free(dirty);
   free(map);
-  for (i = 0; i < npoints; i++)
+  for (int i = 0; i < npoints; i++)
     free(data[i]);
   free(data);
 }
 
 void slave() {
+  printf("Slave: %d\n", rank);
+  struct arg_in_populate arg_in_p;
+  struct arg_out_populate arg_out_p;
+  struct arg_in_compute_centroids arg_in_c;
+  struct arg_out_compute_centroids arg_out_c;
+
+  arg_in_p.data = calloc(npoints, sizeof(vector_t));
+  for (int i = 0; i < npoints; i++)
+    arg_in_p.data[i] = calloc(dimension, sizeof(float));
+  arg_in_p.centroids = calloc(ncentroids, sizeof(vector_t));
+  for (int i = 0; i < ncentroids; i++)
+    arg_in_p.centroids[i] = calloc(dimension, sizeof(float));
+  arg_in_p.map = calloc(npoints, sizeof(int));
+
+  arg_in_c.data = calloc(npoints, sizeof(vector_t));
+  for (int i = 0; i < npoints; i++)
+    arg_in_c.data[i] = calloc(dimension, sizeof(float));
+
+  arg_in_c.dirty = calloc(ncentroids, sizeof(int));
+
+  arg_in_c.map = calloc(npoints, sizeof(int));
+
+
+
+  while (1) {
+    //populate();
+    printf("populate slave begin: %d\n", rank);
+    for (int i = 0; i < npoints; ++i) {
+      MPI_Bcast(arg_in_p.data[i], dimension, MPI_FLOAT, 0, MPI_COMM_WORLD);
+    }
+    MPI_Bcast(arg_in_p.map, npoints, MPI_INT, 0, MPI_COMM_WORLD);
+    for (int i = 0; i < ncentroids; ++i) {
+      MPI_Bcast(arg_in_p.centroids[i], dimension, MPI_FLOAT, 0, MPI_COMM_WORLD);
+    }
+    arg_in_p.begin = ((float) npoints / (float) (size-1)) * rank-1;
+    arg_in_p.end = ((float) npoints /(float) (size)) * rank;
+
+    arg_out_p = populate(arg_in_p);
+
+    MPI_Send(arg_out_p.map, npoints, MPI_INT, 0, 0, MPI_COMM_WORLD);
+    MPI_Send(arg_out_p.dirty, ncentroids, MPI_INT, 0, 1, MPI_COMM_WORLD);
+    MPI_Send(&arg_out_p.too_far, 1, MPI_INT, 0, 2, MPI_COMM_WORLD);
+
+    free(arg_out_p.dirty);
+    printf("populate slave end: %d\n", rank);
+
+    //compute_centroids();
+    printf("compute_centroids slave begin: %d\n", rank);
+
+    for (int i = 0; i < npoints; ++i) {
+      printf("p%d\n", rank);
+      MPI_Bcast(arg_in_c.data[i], dimension, MPI_FLOAT, 0, MPI_COMM_WORLD);
+    }
+    MPI_Bcast(arg_in_c.dirty, ncentroids, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(arg_in_c.map, npoints, MPI_INT, 0, MPI_COMM_WORLD);
+
+    arg_in_c.begin = ((float) ncentroids / (float) (size-1)) * rank-1;
+    arg_in_c.end = ((float) ncentroids /(float) (size)) * rank;
+
+    arg_out_c = compute_centroids(arg_in_c);
+
+    MPI_Send(&arg_out_c.has_changed, 1, MPI_INT, 0, 3, MPI_COMM_WORLD);
+    for (int j = 0; j < ncentroids; ++j) {
+        MPI_Send(arg_out_c.centroids[j], dimension, MPI_FLOAT, 0, 4, MPI_COMM_WORLD);
+    }
+
+    free(arg_out_c.centroids);
+    printf("compute_centroids slave end: %d\n", rank);
+  }
 
 }
 
